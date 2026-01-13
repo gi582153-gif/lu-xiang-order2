@@ -1,0 +1,245 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>滷香饌 - 線上點餐</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            padding-bottom: 80px;
+        }
+
+        .category-header {
+            position: sticky;
+            top: 0;
+            background: white;
+            z-index: 10;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        /* 讀取中的動畫 */
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #92400e;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+    <header class="bg-amber-800 text-white p-4 shadow-md">
+        <h1 class="text-2xl font-bold">滷香饌</h1>
+        <p class="text-sm mt-1">📍 桃園市八德區興豐路645號</p>
+        <p class="text-sm">🕒 17:30 - 23:30 (週日公休)</p>
+    </header>
+
+    <div id="loading" class="text-center py-10">
+        <div class="loader"></div>
+        <p class="text-gray-500">正在讀取最新菜單...</p>
+    </div>
+
+    <div id="menu-container" class="p-4 max-w-md mx-auto hidden"></div>
+
+    <div class="fixed bottom-0 left-0 w-full bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] p-4 flex justify-between items-center max-w-md mx-auto right-0 border-t border-gray-200">
+        <div>
+            <p class="text-gray-600 text-sm">總計</p>
+            <p class="text-2xl font-bold text-amber-600" id="total-price">NT$0</p>
+        </div>
+        <button onclick="showOrderSummary()" class="bg-amber-800 hover:bg-amber-900 text-white font-bold py-2 px-6 rounded-full shadow-lg transition transform active:scale-95">
+            查看訂單 (<span id="total-count">0</span>)
+        </button>
+    </div>
+
+    <div id="order-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-lg w-full max-w-sm p-6 shadow-xl relative">
+            <h2 class="text-xl font-bold mb-4 border-b pb-2">您的點餐清單</h2>
+            <div id="order-list" class="max-h-60 overflow-y-auto mb-4 text-sm text-gray-700"></div>
+            <div class="flex justify-between font-bold text-lg mb-4 text-amber-700">
+                <span>總金額：</span>
+                <span id="modal-total">NT$0</span>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <button onclick="closeModal()" class="bg-gray-200 text-gray-700 py-2 rounded-lg font-medium">再看看</button>
+                <button onclick="submitOrder()" class="bg-green-600 text-white py-2 rounded-lg font-bold">確認結帳 (複製清單)</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let menuData = [];
+        let cart = {};
+
+        // ==========================================
+        // 👇 請把這裡的網址換成你的 Google Sheet CSV 網址 👇
+        // ==========================================
+        const sheetUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSfQ9x4tLrKSwm1WNhswVJyKYhYr3ephHrEeja7STTtSv6G_MUjfJa9MN8X6DuSgDYjtYmNX9sAqEsM/pub?output=csv";
+
+        function init() {
+        Papa.parse(sheetUrl, {
+        download: true,
+        header: true,
+        complete: function(results) {
+        processData(results.data);
+        },
+        error: function(err) {
+        alert("讀取菜單失敗，請檢查網路或網址");
+        console.error(err);
+        }
+        });
+        }
+
+        function processData(rawData) {
+        // 資料轉換與分組
+        let categories = {};
+
+        rawData.forEach((item, index) => {
+        // 過濾掉空行
+        if(!item.name) return;
+
+        if (!categories[item.category]) {
+        categories[item.category] = [];
+        }
+
+        categories[item.category].push({
+        id: index,
+        name: item.name,
+        price: parseInt(item.price),
+        unit: item.unit,
+        // 判斷是否上架 (Excel 裡寫 TRUE 或 true 都可以)
+        soldOut: item.on_sale.toUpperCase() !== 'TRUE'
+        });
+        });
+
+        // 轉回陣列格式
+        menuData = Object.keys(categories).map(key => ({
+        category: key,
+        items: categories[key]
+        }));
+
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('menu-container').classList.remove('hidden');
+        renderMenu();
+        }
+
+        function renderMenu() {
+        const container = document.getElementById('menu-container');
+        let html = '';
+
+        menuData.forEach(cat => {
+        html += `<h3 class="category-header text-lg font-bold text-amber-800 mt-2 mb-2">${cat.category}</h3>`;
+        html += `<div class="space-y-3">`;
+        cat.items.forEach(item => {
+        const isSoldOut = item.soldOut;
+        const bgClass = isSoldOut ? "bg-gray-100 opacity-60" : "bg-white";
+        const btnClass = isSoldOut ? "hidden" : "flex";
+        const statusText = isSoldOut ? '<span class="text-red-600 font-bold text-sm">❌ 已售完</span>' : `$${item.price} / ${item.unit}`;
+
+        html += `
+        <div class="flex justify-between items-center ${bgClass} p-3 rounded-lg shadow-sm border border-gray-100">
+        <div>
+        <h4 class="font-medium text-gray-800">${item.name}</h4>
+        <p class="text-gray-500 text-sm">${statusText}</p>
+        </div>
+        <div class="items-center space-x-3 ${btnClass}">
+        <button onclick="updateCart(${item.id}, -1)" class="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center font-bold text-lg active:bg-gray-300">-</button>
+        <span id="qty-${item.id}" class="w-4 text-center font-medium">0</span>
+        <button onclick="updateCart(${item.id}, 1)" class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-lg active:bg-amber-200">+</button>
+        </div>
+        </div>
+        `;
+        });
+        html += `</div>`;
+        });
+        container.innerHTML = html;
+        }
+
+        function updateCart(itemId, change) {
+        if (!cart[itemId]) cart[itemId] = 0;
+        cart[itemId] += change;
+        if (cart[itemId] < 0) cart[itemId] = 0;
+        document.getElementById(`qty-${itemId}`).innerText = cart[itemId];
+        calculateTotal();
+        }
+
+        function calculateTotal() {
+        let total = 0;
+        let count = 0;
+        menuData.forEach(cat => {
+        cat.items.forEach(item => {
+        const qty = cart[item.id] || 0;
+        if (qty > 0) {
+        total += item.price * qty;
+        count += qty;
+        }
+        });
+        });
+        document.getElementById('total-price').innerText = `NT$${total}`;
+        document.getElementById('total-count').innerText = count;
+        }
+
+        function showOrderSummary() {
+        const list = document.getElementById('order-list');
+        let html = '';
+        let total = 0;
+        let hasItem = false;
+
+        menuData.forEach(cat => {
+        cat.items.forEach(item => {
+        const qty = cart[item.id] || 0;
+        if (qty > 0) {
+        hasItem = true;
+        const subtotal = item.price * qty;
+        total += subtotal;
+        html += `<div class="flex justify-between mb-2"><span>${item.name} x ${qty}</span><span>$${subtotal}</span></div>`;
+        }
+        });
+        });
+
+        if (!hasItem) { alert("還沒點餐喔！"); return; }
+        list.innerHTML = html;
+        document.getElementById('modal-total').innerText = `NT$${total}`;
+        document.getElementById('order-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+        document.getElementById('order-modal').classList.add('hidden');
+        }
+
+        function submitOrder() {
+        let message = "老闆我要點餐：\n";
+        let total = 0;
+        menuData.forEach(cat => {
+        cat.items.forEach(item => {
+        const qty = cart[item.id] || 0;
+        if (qty > 0) {
+        message += `${item.name} x ${qty}\n`;
+        total += item.price * qty;
+        }
+        });
+        });
+        message += `----------------\n總金額：$${total}`;
+        navigator.clipboard.writeText(message).then(() => { alert("已複製！"); });
+        }
+
+        // 啟動程式
+        init();
+    </script>
+</body>
+</html>
